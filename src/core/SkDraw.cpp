@@ -822,6 +822,44 @@ void SkDraw::drawRect(const SkRect& rect, const SkPaint& paint) const {
         return;
     }
 
+#ifdef SKDRAW_OPT_ON_ARM32
+    //Based on enum Delta defined in SkDeviceLooper class
+    int delta = (paint.isAntiAlias() ? 4096 : 16384);
+    if( SkLikely(ir.right() < delta && ir.bottom() < delta)){
+         //Refer to SkDeviceLooper::SkDeviceLooper constructor.
+         //On success, fState=kSimple_State so no change in rect bounds and use of SkDeviceLooper class
+         //Same is true for fState=kDone_State. This conidtional check is not implemented now.
+         SkAutoBlitterChoose blitterStorage(*fBitmap, matrix, paint);
+         const SkRasterClip& clip = *fRC;
+         SkBlitter*          blitter = blitterStorage.get();
+
+         switch (rtype) {
+           case kFill_RectType:
+               if (paint.isAntiAlias()) {
+                   SkScan::AntiFillRect(devRect, clip, blitter);
+               } else {
+                   SkScan::FillRect(devRect, clip, blitter);
+               }
+               break;
+           case kStroke_RectType:
+               if (paint.isAntiAlias()) {
+                   SkScan::AntiFrameRect(devRect, strokeSize, clip, blitter);
+               } else {
+                   SkScan::FrameRect(devRect, strokeSize, clip, blitter);
+               }
+               break;
+           case kHair_RectType:
+               if (paint.isAntiAlias()) {
+                   SkScan::AntiHairRect(devRect, clip, blitter);
+               } else {
+                   SkScan::HairRect(devRect, clip, blitter);
+               }
+               break;
+           default:
+               SkDEBUGFAIL("bad rtype");
+         }
+    }else{
+#endif
     SkDeviceLooper looper(*fBitmap, *fRC, ir, paint.isAntiAlias());
     while (looper.next()) {
         SkRect localDevRect;
@@ -864,6 +902,9 @@ void SkDraw::drawRect(const SkRect& rect, const SkPaint& paint) const {
         }
     }
 }
+#ifdef SKDRAW_OPT_ON_ARM32
+}
+#endif
 
 void SkDraw::drawDevMask(const SkMask& srcM, const SkPaint& paint) const {
     if (srcM.fBounds.isEmpty()) {

@@ -210,6 +210,7 @@ LOCAL_SRC_FILES := \
 	src/core/SkWriteBuffer.cpp \
 	src/core/SkWriter32.cpp \
 	src/core/SkXfermode.cpp \
+        src/core/SkMultiThreadCanvas.cpp \
 	src/doc/SkDocument.cpp \
 	src/image/SkImage.cpp \
 	src/image/SkImagePriv.cpp \
@@ -579,6 +580,31 @@ LOCAL_EXPORT_C_INCLUDE_DIRS := \
 	$(LOCAL_PATH)/include/utils \
 	$(LOCAL_PATH)/src/utils
 
+###############################################################################
+#  hardware jpeg decoder for A64
+
+ifneq ($(filter tulip,$(TARGET_BOARD_PLATFORM)),)
+
+LOCAL_SHARED_LIBRARIES += libvdecoder libMemAdapter
+
+LOCAL_C_INCLUDES +=                  \
+	frameworks/av/media/liballwinner/LIBRARY/                         \
+	frameworks/av/media/liballwinner/LIBRARY/VE/include                       \
+	frameworks/av/media/liballwinner/LIBRARY/MEMORY/include                   \
+	frameworks/av/media/liballwinner/LIBRARY/CODEC/VIDEO/DECODER/include      \
+	frameworks/av/media/liballwinner/LIBRARY/CODEC/AUDIO/DECODER/include      \
+	frameworks/av/media/liballwinner/LIBRARY/CODEC/SUBTITLE/DECODER/include   \
+	frameworks/av/media/liballwinner/LIBRARY/DEMUX/BASE/include       \
+	frameworks/av/media/liballwinner/LIBRARY/DEMUX/PARSER/include     \
+	frameworks/av/media/liballwinner/LIBRARY/DEMUX/STREAM/include     \
+
+LOCAL_SRC_FILES += src/images/IonMemPool.c
+
+LOCAL_CFLAGS += -DHW_JPEG
+
+endif
+#####################################################################################
+
 LOCAL_MODULE := \
 	libskia
 
@@ -594,6 +620,24 @@ LOCAL_SRC_FILES_arm += \
 	src/opts/SkXfermode_opts_arm.cpp
 
 ifeq ($(ARCH_ARM_HAVE_NEON), true)
+
+TARGET_USE_NEON_OPTIMIZATION ?= true
+ifeq ($(TARGET_IS_64_BIT), true)
+	TARGET_USE_NEON_OPTIMIZATION := false
+endif
+ifeq ($(TARGET_USE_NEON_OPTIMIZATION),true)
+LOCAL_CFLAGS += -DNEON_BLIT_ANTI_H
+LOCAL_CFLAGS += -DAW_MULTIPLE_THREAD_SUPPORT
+LOCAL_CFLAGS += -DNEON_BLIT_H
+LOCAL_CFLAGS += -DARM32_NEON_OPTIMIZATION
+
+#following isn't use neon or asm, but havn't verficated on arch64. so close these temporarily
+LOCAL_CFLAGS += -DSKDRAW_OPT_ON_ARM32
+LOCAL_CFLAGS += -DSKPAINTOPTIONS_OPT
+LOCAL_CFLAGS += -DSKLANG_OPT
+
+endif
+
 LOCAL_SRC_FILES_arm += \
 	src/opts/memset16_neon.S \
 	src/opts/memset32_neon.S \
@@ -603,7 +647,9 @@ LOCAL_SRC_FILES_arm += \
 	src/opts/SkBlitRow_opts_arm_neon.cpp \
 	src/opts/SkBlurImage_opts_neon.cpp \
 	src/opts/SkMorphology_opts_neon.cpp \
-	src/opts/SkXfermode_opts_arm_neon.cpp
+	src/opts/SkXfermode_opts_arm_neon.cpp \
+	src/core/asm/SkBlitter_RGB16_NEON.S \
+	src/opts/ext/S32_Opaque_D32_filter_DX_shaderproc_neon.cpp
 
 LOCAL_CFLAGS_arm += \
 	-D__ARM_HAVE_NEON
