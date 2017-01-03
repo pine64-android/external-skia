@@ -28,6 +28,10 @@ extern void  Repeat_S16_D16_filter_DX_shaderproc_neon(const SkBitmapProcState&, 
 extern void  SI8_opaque_D32_filter_DX_neon(const SkBitmapProcState&, const uint32_t*, int, SkPMColor*);
 extern void  SI8_opaque_D32_filter_DX_shaderproc_neon(const SkBitmapProcState&, int, int, uint32_t*, int);
 extern void  Clamp_SI8_opaque_D32_filter_DX_shaderproc_neon(const SkBitmapProcState&, int, int, uint32_t*, int);
+#ifdef ARM32_NEON_OPTIMIZATION
+extern void  S32_opaque_D32_filter_DX_neon(const SkBitmapProcState&, const uint32_t*, int, SkPMColor*);
+extern void  Clamp_S32_Opaque_D32_filter_DX_shaderproc_neon(const SkBitmapProcState&, int, int, uint32_t*, int);
+#endif
 #endif
 
 extern void Clamp_S32_opaque_D32_nofilter_DX_shaderproc(const SkBitmapProcState&, int, int, uint32_t*, int);
@@ -516,6 +520,10 @@ bool SkBitmapProcState::chooseScanlineProcs(bool trivialMatrix, bool clampClamp,
             }
         } else if (SK_ARM_NEON_WRAP(SI8_opaque_D32_filter_DX) == fSampleProc32 && clampClamp) {
             fShaderProc32 = SK_ARM_NEON_WRAP(Clamp_SI8_opaque_D32_filter_DX_shaderproc);
+#ifdef ARM32_NEON_OPTIMIZATION
+		} else if (SK_ARM_NEON_WRAP(S32_opaque_D32_filter_DX) == fSampleProc32 && clampClamp) {
+            fShaderProc32 = SK_ARM_NEON_WRAP(Clamp_S32_Opaque_D32_filter_DX_shaderproc);
+#endif
         } else if (S32_opaque_D32_nofilter_DX == fSampleProc32 && clampClamp) {
             fShaderProc32 = Clamp_S32_opaque_D32_nofilter_DX_shaderproc;
         }

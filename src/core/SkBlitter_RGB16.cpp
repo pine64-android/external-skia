@@ -16,6 +16,11 @@
 #include "SkUtilsArm.h"
 #include "SkXfermode.h"
 
+#ifdef AW_MULTIPLE_THREAD_SUPPORT
+#include "SkMultiThreadCanvas.h"
+#define THREADHOLD  (80*80)    //TODO: this is a guess value.
+#endif /*AW_MULTIPLE_THREAD_SUPPORT*/
+
 #if SK_MIPS_HAS_DSP
 extern void blitmask_d565_opaque_mips(int width, int height, uint16_t* device,
                                       unsigned deviceRB, const uint8_t* alpha,
@@ -577,6 +582,15 @@ void SkRGB16_Blitter::blitH(int x, int y, int width) {
     fColorProc16(device, fSrcColor32, width, x, y);
 }
 
+#ifdef ARM32_NEON_OPTIMIZATION
+#ifdef NEON_BLIT_ANTI_H
+extern "C" void blitAntiH_NEON(const SkAlpha* SK_RESTRICT antialias,
+                               uint16_t * SK_RESTRICT device,
+                               const int16_t* SK_RESTRICT runs,
+                               uint32_t srcExpanded, unsigned scale);
+#endif
+#endif
+
 void SkRGB16_Blitter::blitAntiH(int x, int y,
                                 const SkAlpha* SK_RESTRICT antialias,
                                 const int16_t* SK_RESTRICT runs) {
@@ -584,6 +598,9 @@ void SkRGB16_Blitter::blitAntiH(int x, int y,
     uint32_t    srcExpanded = fExpandedRaw16;
     unsigned    scale = fScale;
 
+#if defined(NEON_BLIT_ANTI_H) && defined(ARM32_NEON_OPTIMIZATION)
+        blitAntiH_NEON(antialias, device, runs, srcExpanded, scale);
+#else
     // TODO: respect fDoDither
     for (;;) {
         int count = runs[0];
@@ -607,6 +624,7 @@ void SkRGB16_Blitter::blitAntiH(int x, int y,
         }
         device += count;
     }
+#endif
 }
 
 static inline void blend_8_pixels(U8CPU bw, uint16_t dst[], unsigned dst_scale,
@@ -673,15 +691,83 @@ void SkRGB16_Blitter::blitV(int x, int y, int height, SkAlpha alpha) {
     } while (--height != 0);
 }
 
+
+#ifdef AW_MULTIPLE_THREAD_SUPPORT
+class SkTaskBlend32_16: public SkTask_Base{
+public:
+	SkTaskBlend32_16(SkBlitRow::ColorProc16 _fColorProc16,
+                    SkPMColor src32,
+		            uint16_t* SK_RESTRICT device,
+		            size_t    deviceRB,
+		            int w,
+		            int h,
+		            int _x,
+		            int _y){
+		fColorProc16 = _fColorProc16;            
+        src = src32;
+		dst = device;
+		rowbytes = deviceRB;
+		width    = w;
+		height   = h;
+        x = _x;
+        y = _y;
+	}
+	~SkTaskBlend32_16(){}
+
+    virtual void go(){
+		while(--height >= 0){
+            fColorProc16(dst, src, width, x, y);
+			dst = (uint16_t*)((char*)dst + rowbytes);
+		}
+    }
+private:
+    SkBlitRow::ColorProc16 fColorProc16;
+	SkPMColor src;
+	uint16_t* SK_RESTRICT dst;
+    size_t    rowbytes;
+	int width;
+	int height;
+    int x;
+    int y;
+};
+#endif /*AW_MULTIPLE_THREAD_SUPPORT*/
+
 void SkRGB16_Blitter::blitRect(int x, int y, int width, int height) {
     SkASSERT(x + width <= fDevice.width() && y + height <= fDevice.height());
     uint16_t* SK_RESTRICT device = fDevice.getAddr16(x, y);
     size_t    deviceRB = fDevice.rowBytes();
 
+#ifdef AW_MULTIPLE_THREAD_SUPPORT
+    SkCanvasComputeThreadWrapper *pThreadHandler = &gComptuteThread;
+    if(pThreadHandler->canUseThread()/* && (width*height) >= THREADHOLD*/){//TODO
+        //creat a sub task which will be handled by compute thread.
+		SkTaskBlend32_16* pTask =
+		      new SkTaskBlend32_16(fColorProc16, fSrcColor32, device, deviceRB, width, (height >> 1), x, y);
+		pThreadHandler->addTask(pTask);
+
+		//main thread do other work.
+		device = fDevice.getAddr16(x, y + (height >> 1));
+		height = height - (height >> 1);
+		while(--height >= 0){
+            fColorProc16(device, fSrcColor32, width, x, y + (height >> 1));
+            device = (uint16_t*)((char*)device + deviceRB);
+        }
+
+        //sync
+		pTask->wait();
+        delete pTask;
+    }else{
+        while (--height >= 0) {
+            fColorProc16(device, fSrcColor32, width, x, y);
+            device = (uint16_t*)((char*)device + deviceRB);
+        }
+    }
+#else
     while (--height >= 0) {
         fColorProc16(device, fSrcColor32, width, x, y);
         device = (uint16_t*)((char*)device + deviceRB);
     }
+#endif /*AW_MULTIPLE_THREAD_SUPPORT*/
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -709,6 +795,41 @@ void SkRGB16_Shader16_Blitter::blitH(int x, int y, int width) {
     }
 }
 
+#ifdef AW_MULTIPLE_THREAD_SUPPORT
+class SkTask_S16_D16_Shader : public SkTask_Base{
+public:
+    SkTask_S16_D16_Shader(SkShader::Context*pShader,
+		                  int nX, int nY,
+		                  int w, int h,
+		                  uint16_t *pDst,
+		                  size_t rowBytes){
+		shader = pShader;
+		x = nX;
+		y = nY;
+		width = w;
+		height = h;
+		dst = pDst;
+		sRowBytes = rowBytes;
+    }
+	~SkTask_S16_D16_Shader(){}
+	virtual void go(){
+		do {
+			shader->shadeSpan16(x, y, dst, width);
+			y += 1;
+			dst = (uint16_t*)((char*)dst + sRowBytes);
+		} while (--height);
+	}
+private:
+	SkShader::Context*shader;
+	int x;
+	int y;
+	int width;
+	int height;
+	uint16_t *dst;
+	size_t sRowBytes;
+};
+#endif /*AW_MULTIPLE_THREAD_SUPPORT*/
+
 void SkRGB16_Shader16_Blitter::blitRect(int x, int y, int width, int height) {
     SkShader::Context* shaderContext = fShaderContext;
     uint16_t*          dst = fDevice.getAddr16(x, y);
@@ -728,11 +849,77 @@ void SkRGB16_Shader16_Blitter::blitRect(int x, int y, int width, int height) {
                 } while (--height);
             }
         } else {    // need to call shadeSpan16 for every line
+#ifdef AW_MULTIPLE_THREAD_SUPPORT
+            SkCanvasComputeThreadWrapper *pThreadHandler = &gComptuteThread;
+#if 0
+            if(pThreadHandler->canUseThread()){
+			    SkTask_S16_D16_Shader *Task[2];
+			    int nTaskHeight = height / 3;
+			    Task[0] =
+				    new SkTask_S16_D16_Shader(shader,
+										  x,y,
+										  width,nTaskHeight,
+										  dst, dstRB);
+			    Task[1] =
+				    new SkTask_S16_D16_Shader(shader,
+										  x,y + nTaskHeight,
+										  width,nTaskHeight,
+										  (uint16_t*)((char*)dst + dstRB*(nTaskHeight)), dstRB);
+
+			    pThreadHandler->addTask(Task[0]);
+			    pThreadHandler->addTask2(Task[1]);
+
+			    dst = (uint16_t*)((char*)dst + dstRB*(nTaskHeight<<1));
+			    y += (nTaskHeight<<1);
+			    height -= (nTaskHeight<<1);
+			    do{
+				    shader->shadeSpan16(x, y, dst, width);
+				    y += 1;
+				    dst = (uint16_t*)((char*)dst + dstRB);
+			    }while(--height);
+
+			    Task[0]->wait();
+			    Task[1]->wait();
+			    delete Task[0];
+			    delete Task[1];
+            }
+#endif
+            if(pThreadHandler->canUseThread()){//TODO: Add a threadhold control
+                //creat a sub task which will be handled by compute thread.
+				SkTask_S16_D16_Shader* pTask =
+					new SkTask_S16_D16_Shader(shaderContext,
+					                          x,y,
+					                          width,height >> 1,
+					                          dst, dstRB);
+				pThreadHandler->addTask(pTask);
+
+				//main thread do other work
+				dst = (uint16_t*)((char*)dst + dstRB*(height >> 1));
+				y += (height>>1);
+				height -= (height>>1);
+				do{
+					shaderContext->shadeSpan16(x, y, dst, width);
+					y += 1;
+					dst = (uint16_t*)((char*)dst + dstRB);
+				}while(--height);
+
+				//sync
+				pTask->wait();
+				delete pTask;
+            }else{
+	            do {
+		            shaderContext->shadeSpan16(x, y, dst, width);
+		            y += 1;
+		            dst = (uint16_t*)((char*)dst + dstRB);
+	            } while (--height);
+            }
+#else
             do {
                 shaderContext->shadeSpan16(x, y, dst, width);
                 y += 1;
                 dst = (uint16_t*)((char*)dst + dstRB);
             } while (--height);
+#endif /*AW_MULTIPLE_THREAD_SUPPORT*/
         }
     } else {
         int scale = SkAlpha255To256(alpha);

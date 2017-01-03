@@ -665,9 +665,23 @@ LOCAL_SRC_FILES_arm += \
 	src/opts/SkMorphology_opts_arm.cpp \
 	src/opts/SkTextureCompression_opts_arm.cpp \
 	src/opts/SkUtils_opts_arm.cpp \
-	src/opts/SkXfermode_opts_arm.cpp
+	src/opts/SkXfermode_opts_arm.cpp \
+	src/core/SkMultiThreadCanvas.cpp
+
+LOCAL_CFLAGS_arm += -DAW_MULTIPLE_THREAD_SUPPORT
 
 ifeq ($(ARCH_ARM_HAVE_NEON), true)
+
+LOCAL_CFLAGS_arm += -DNEON_BLIT_ANTI_H
+LOCAL_CFLAGS_arm += -DNEON_BLIT_H
+LOCAL_CFLAGS_arm += -DARM32_NEON_OPTIMIZATION
+
+#following isn't use neon or asm, but havn't verficated on arch64. so close these temporarily
+LOCAL_CFLAGS_arm += -DSKDRAW_OPT_ON_ARM32
+#LOCAL_CFLAGS_arm += -DSKPAINTOPTIONS_OPT
+#LOCAL_CFLAGS_arm += -DSKLANG_OPT
+
+
 LOCAL_SRC_FILES_arm += \
 	src/opts/SkBitmapProcState_arm_neon.cpp \
 	src/opts/SkBitmapProcState_matrixProcs_neon.cpp \
@@ -677,10 +691,17 @@ LOCAL_SRC_FILES_arm += \
 	src/opts/SkMorphology_opts_neon.cpp \
 	src/opts/SkTextureCompression_opts_neon.cpp \
 	src/opts/SkUtils_opts_arm_neon.cpp \
-	src/opts/SkXfermode_opts_arm_neon.cpp
+	src/opts/SkXfermode_opts_arm_neon.cpp \
+	src/core/asm/SkBlitter_RGB16_NEON.S \
+	src/opts/ext/S32_Opaque_D32_filter_DX_shaderproc_neon.cpp
+
 
 LOCAL_CFLAGS_arm += \
 	-DSK_ARM_HAS_NEON
+
+#compat with old patch
+LOCAL_CFLAGS_arm += \
+	-D__ARM_HAVE_NEON
 
 endif
 
